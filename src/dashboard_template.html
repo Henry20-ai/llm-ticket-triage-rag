@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM Ticket Triage with RAG – dashboard</title>
+<style>
+  :root {
+    --bg: #f5f7fa; --card: #ffffff; --text: #1b2430; --muted: #5b6675; --grid: #e3e8ee; --line: #d8dee6;
+    --blue: #2f6fed; --orange: #e8801c; --green: #1f9d73; --red: #d64550; --purple: #7a5af8;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f141b; --card: #171e28; --text: #e6ebf2; --muted: #9aa6b5; --grid: #2a3441; --line: #2a3441;
+      --blue: #5b93ff; --orange: #f3a04a; --green: #3dc596; --red: #ef6a74; --purple: #9b86ff;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-padding-top: 12px; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+  header, main { max-width: 1120px; margin: 0 auto; padding: 0 16px; }
+  header { padding-top: 28px; padding-bottom: 4px; }
+  h1 { font-size: 26px; margin: 0 0 6px; }
+  h2 { font-size: 19px; margin: 34px 0 12px; }
+  h3 { font-size: 15px; margin: 0 0 10px; }
+  p.sub { color: var(--muted); margin: 0; max-width: 760px; }
+  .grid { display: grid; gap: 14px; }
+  .kpis { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); margin-top: 20px; }
+  .two { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0; }
+  .kpi .v { font-size: 28px; font-weight: 650; line-height: 1.15; }
+  .kpi .l { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .chart-box { position: relative; height: 270px; }
+  .note { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12.5px; text-transform: uppercase; letter-spacing: .03em; }
+  .scroll { overflow-x: auto; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .Low { background: color-mix(in srgb, var(--green) 18%, transparent); color: var(--green); }
+  .Medium { background: color-mix(in srgb, var(--blue) 18%, transparent); color: var(--blue); }
+  .High { background: color-mix(in srgb, var(--orange) 20%, transparent); color: var(--orange); }
+  .Urgent { background: color-mix(in srgb, var(--red) 18%, transparent); color: var(--red); }
+  .rev { background: color-mix(in srgb, var(--purple) 18%, transparent); color: var(--purple); }
+  .filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+  select, input { background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+                  padding: 8px 10px; font: inherit; min-width: 0; }
+  input[type=search] { flex: 1 1 220px; }
+  button { background: var(--blue); color: #fff; border: 0; border-radius: 8px; padding: 9px 16px; font: inherit; cursor: pointer; }
+  tr.row { cursor: pointer; }
+  tr.row:hover td { background: color-mix(in srgb, var(--blue) 6%, transparent); }
+  tr.detail td { background: color-mix(in srgb, var(--blue) 5%, transparent); }
+  .detail b { display: block; font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+  ul.plain { margin: 0; padding-left: 20px; }
+  ul.plain li { margin: 6px 0; }
+  .big { font-size: 22px; font-weight: 650; }
+  footer { max-width: 1120px; margin: 30px auto 40px; padding: 0 16px; color: var(--muted); font-size: 13px; }
+  @media (max-width: 560px) { h1 { font-size: 22px; } .kpi .v { font-size: 24px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>LLM Ticket Triage with RAG</h1>
+  <p class="sub">Support tickets for a fictional online store are classified by Gemini (category, priority, suggested reply), grounded in
+  SOP documents retrieved from Postgres + pgvector. Risky or uncertain tickets go to a human review queue.
+  All data is synthetic. <span id="gen"></span></p>
+</header>
+
+<main>
+  <section class="grid kpis" id="kpis"></section>
+
+  <h2>Ticket volume</h2>
+  <section class="grid two">
+    <div class="card"><h3>Tickets by category: automatic vs sent to a person</h3><div class="chart-box"><canvas id="c-category"></canvas></div></div>
+    <div class="card"><h3>Tickets by AI-assigned priority</h3><div class="chart-box"><canvas id="c-priority"></canvas></div></div>
+    <div class="card"><h3>Tickets created per week</h3><div class="chart-box"><canvas id="c-weekly"></canvas></div></div>
+    <div class="card"><h3>Average hours to resolve, by priority</h3><div class="chart-box"><canvas id="c-resolution"></canvas></div>
+      <p class="note">Resolution times are simulated when the data is generated.</p></div>
+  </section>
+
+  <h2>How well does it work?</h2>
+  <section class="grid two" id="eval-section">
+    <div class="card" id="eval-table-card"></div>
+    <div class="card"><h3>Stated confidence vs how often the answer was fully right</h3><div class="chart-box"><canvas id="c-confidence"></canvas></div>
+      <p class="note">The model reports high confidence whether or not it is right, so routing to a human does not rely on it.</p></div>
+    <div class="card" id="agreement-card"></div>
+    <div class="card" id="rules-card"></div>
+  </section>
+
+  <h2>Ticket explorer</h2>
+  <section class="card">
+    <div class="filters">
+      <input type="search" id="q" placeholder="Search ticket text…" aria-label="Search ticket text">
+      <select id="f-category" aria-label="Category"></select>
+      <select id="f-priority" aria-label="Priority"></select>
+      <select id="f-review" aria-label="Review status">
+        <option value="">All tickets</option><option value="yes">Sent to a person</option><option value="no">Handled automatically</option>
+      </select>
+    </div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>ID</th><th>Category</th><th>Priority</th><th>Confidence</th><th>Routing</th><th>Ticket</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <p class="note" id="count"></p>
+    <button id="more" type="button">Show more</button>
+    <p class="note">Click a row to see the AI’s reasoning and suggested reply.</p>
+  </section>
+
+  <h2>Method and limits</h2>
+  <section class="card">
+    <ul class="plain">
+      <li><b>Pipeline:</b> ticket → Gemini embedding → pgvector search over 25 SOP documents → Gemini returns category, priority, confidence and a reply → review rule → Postgres.</li>
+      <li><b>Review rule:</b> a ticket goes to a person if the predicted priority is High or Urgent, the category is Billing &amp; Payments, model confidence is low, or no SOP matches well.</li>
+      <li><b>Evaluation:</b> accuracy is measured on tickets labelled by hand before any model output was seen. A fresh test set was kept apart from the tickets used to tune the prompt.</li>
+      <li><b>Limits:</b> small samples (wide confidence intervals), synthetic tickets, priority is subjective even between two humans, and the model is not reliable enough to run without review.</li>
+    </ul>
+  </section>
+</main>
+<footer id="repo"></footer>
+
+<script type="application/json" id="data">__DATA__</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+(function () {
+  var D = JSON.parse(document.getElementById('data').textContent);
+  var css = getComputedStyle(document.documentElement);
+  function col(name) { return css.getPropertyValue(name).trim(); }
+  var PRIORITY_COLOR = { Low: col('--green'), Medium: col('--blue'), High: col('--orange'), Urgent: col('--red') };
+
+  function el(tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined && text !== null) node.textContent = text;
+    return node;
+  }
+
+  document.getElementById('gen').textContent = 'Generated ' + D.generated_at + '.';
+  if (D.repo_url) {
+    var link = el('a', null, D.repo_url); link.href = D.repo_url;
+    document.getElementById('repo').appendChild(el('span', null, 'Source code: '));
+    document.getElementById('repo').appendChild(link);
+  }
+
+  // ---------- KPI cards ----------
+  var kpis = [
+    [D.kpis.triaged.toLocaleString(), 'tickets triaged'],
+    [D.kpis.review_pct + '%', 'sent to a person (' + D.kpis.review_count + ')'],
+    [D.kpis.auto_pct + '%', 'handled automatically'],
+    [D.kpis.avg_resolution_hours === null ? '–' : D.kpis.avg_resolution_hours + ' h', 'average time to resolve'],
+    [D.kpis.open_tickets, 'tickets still open']
+  ];
+  kpis.forEach(function (k) {
+    var card = el('div', 'card kpi');
+    card.appendChild(el('div', 'v', k[0]));
+    card.appendChild(el('div', 'l', k[1]));
+    document.getElementById('kpis').appendChild(card);
+  });
+
+  // ---------- Charts ----------
+  var charts = [];
+  if (window.Chart) {
+    Chart.defaults.color = col('--muted');
+    Chart.defaults.borderColor = col('--grid');
+    Chart.defaults.font.family = 'system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif';
+  }
+  function chart(id, config) {
+    if (!window.Chart) return;
+    config.options = config.options || {};
+    config.options.responsive = true;
+    config.options.maintainAspectRatio = false;
+    charts.push(new Chart(document.getElementById(id), config));
+  }
+
+  chart('c-category', {
+    type: 'bar',
+    data: {
+      labels: D.by_category.map(function (r) { return r.category; }),
+      datasets: [
+        { label: 'Handled automatically', data: D.by_category.map(function (r) { return r.count - r.review; }), backgroundColor: col('--blue') },
+        { label: 'Sent to a person', data: D.by_category.map(function (r) { return r.review; }), backgroundColor: col('--purple') }
+      ]
+    },
+    options: { indexAxis: 'y', scales: { x: { stacked: true, beginAtZero: true }, y: { stacked: true } }, plugins: { legend: { position: 'bottom' } } }
+  });
+
+  chart('c-priority', {
+    type: 'bar',
+    data: {
+      labels: D.by_priority.map(function (r) { return r.priority; }),
+      datasets: [{ label: 'Tickets', data: D.by_priority.map(function (r) { return r.count; }),
+                   backgroundColor: D.by_priority.map(function (r) { return PRIORITY_COLOR[r.priority]; }) }]
+    },
+    options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+  });
+
+  chart('c-weekly', {
+    type: 'line',
+    data: {
+      labels: D.weekly.map(function (r) { return r.week; }),
+      datasets: [{ label: 'Tickets', data: D.weekly.map(function (r) { return r.count; }), borderColor: col('--blue'),
+                   backgroundColor: col('--blue'), tension: 0.25, pointRadius: 2 }]
+    },
+    options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+  });
+
+  chart('c-resolution', {
+    type: 'bar',
+    data: {
+      labels: D.resolution_by_priority.map(function (r) { return r.priority; }),
+      datasets: [{ label: 'Hours', data: D.resolution_by_priority.map(function (r) { return r.hours; }),
+                   backgroundColor: D.resolution_by_priority.map(function (r) { return PRIORITY_COLOR[r.priority]; }) }]
+    },
+    options: { indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true } } }
+  });
+
+  // ---------- Evaluation ----------
+  var E = D.evaluation || {};
+  var sets = ['test', 'dev'].filter(function (s) { return E[s]; });
+  var setTitle = { test: 'Fresh test set', dev: 'Development set' };
+
+  function cell(o) {
+    return o.pct.toFixed(1) + '% (' + o.k + '/' + o.n + ')';
+  }
+  function ciText(o) { return '95% CI ' + o.lo + '–' + o.hi + '%'; }
+
+  var tableCard = document.getElementById('eval-table-card');
+  if (sets.length) {
+    tableCard.appendChild(el('h3', null, 'Accuracy against hand labels'));
+    var scroll = el('div', 'scroll'); var table = el('table');
+    var head = el('tr'); head.appendChild(el('th', null, 'Measure'));
+    sets.forEach(function (s) { head.appendChild(el('th', null, setTitle[s] + ' (n=' + E[s].n + ')')); });
+    table.appendChild(head);
+    [['category', 'Category correct'], ['priority', 'Priority exactly right'], ['priority_within_one', 'Priority within one level'], ['both', 'Category and priority both right']]
+      .forEach(function (m) {
+        var tr = el('tr'); tr.appendChild(el('td', null, m[1]));
+        sets.forEach(function (s) {
+          var td = el('td'); td.appendChild(el('b', null, cell(E[s][m[0]]))); td.appendChild(el('div', 'note', ciText(E[s][m[0]])));
+          tr.appendChild(td);
+        });
+        table.appendChild(tr);
+      });
+    scroll.appendChild(table); tableCard.appendChild(scroll);
+    var ref = E.test || E.dev;
+    var urgentText = 'Real Urgent tickets rated lower by the AI: ' + ref.urgent.rated_lower + ' of ' + ref.urgent.total + ' (' + setTitle[E.test ? 'test' : 'dev'].toLowerCase() + ').';
+    tableCard.appendChild(el('p', 'note', urgentText));
+    tableCard.appendChild(el('p', 'note', 'The tuned prompt was checked on the development set; the fresh test set is the number to trust.'));
+  } else {
+    tableCard.appendChild(el('p', 'note', 'No evaluation data yet.'));
+  }
+
+  if (sets.length) {
+    chart('c-confidence', {
+      type: 'bar',
+      data: {
+        labels: sets.map(function (s) { return setTitle[s]; }),
+        datasets: [
+          { label: 'Average stated confidence', data: sets.map(function (s) { return Math.round(E[s].stated_confidence * 100); }), backgroundColor: col('--orange') },
+          { label: 'Category and priority both right', data: sets.map(function (s) { return Math.round(E[s].actual_both * 100); }), backgroundColor: col('--blue') }
+        ]
+      },
+      options: { plugins: { legend: { position: 'bottom' } }, scales: { y: { beginAtZero: true, max: 100, ticks: { callback: function (v) { return v + '%'; } } } } }
+    });
+  }
+
+  var agreementCard = document.getElementById('agreement-card');
+  var ag = E.test ? E.test.agreement : null;   // the second labeller labelled the test set
+  if (ag) {
+    agreementCard.appendChild(el('h3', null, 'Do two humans agree with each other?'));
+    var list = el('ul', 'plain');
+    [
+      'Category: ' + cell(ag.category) + ', kappa ' + ag.category_kappa.toFixed(2),
+      'Priority (exact): ' + cell(ag.priority) + ', kappa ' + ag.priority_kappa.toFixed(2),
+      'AI vs the second person: category ' + cell(ag.ai_category) + ', priority ' + cell(ag.ai_priority)
+    ].forEach(function (t) { list.appendChild(el('li', null, t)); });
+    agreementCard.appendChild(list);
+    agreementCard.appendChild(el('p', 'note', 'Two people labelled the same ' + ag.n + ' tickets independently. Where humans disagree there is no single right answer, so human agreement is a realistic ceiling for the AI.'));
+  } else {
+    agreementCard.style.display = 'none';
+  }
+
+  var rulesCard = document.getElementById('rules-card');
+  var rulesSet = E.test || E.dev;
+  if (rulesSet) {
+    rulesCard.appendChild(el('h3', null, 'Review rules compared (' + (E.test ? 'test' : 'dev') + ' set)'));
+    var rs = el('div', 'scroll'), rt = el('table');
+    var rh = el('tr');
+    ['Rule', 'Sent to a person', 'Wrong answers caught', 'Urgent missed'].forEach(function (h) { rh.appendChild(el('th', null, h)); });
+    rt.appendChild(rh);
+    rulesSet.rules.forEach(function (r) {
+      var tr = el('tr');
+      tr.appendChild(el('td', null, r.rule));
+      tr.appendChild(el('td', null, r.flagged + ' (' + r.flagged_pct + '%)'));
+      tr.appendChild(el('td', null, r.caught + ' of ' + r.wrong));
+      tr.appendChild(el('td', null, r.urgent_missed + ' of ' + r.urgent_total));
+      rt.appendChild(tr);
+    });
+    rs.appendChild(rt); rulesCard.appendChild(rs);
+    rulesCard.appendChild(el('p', 'note', 'Flagging more tickets catches more mistakes but saves less work. The “current rule” is the one used in the pipeline.'));
+  } else {
+    rulesCard.style.display = 'none';
+  }
+
+  // ---------- Ticket explorer ----------
+  var PAGE = 25, shown = PAGE, filtered = D.tickets;
+  var fCat = document.getElementById('f-category'), fPri = document.getElementById('f-priority');
+  function fill(select, label, values) {
+    select.appendChild(new Option(label, ''));
+    values.forEach(function (v) { select.appendChild(new Option(v, v)); });
+  }
+  fill(fCat, 'All categories', D.by_category.map(function (r) { return r.category; }));
+  fill(fPri, 'All priorities', ['Urgent', 'High', 'Medium', 'Low']);
+
+  function applyFilters() {
+    var q = document.getElementById('q').value.trim().toLowerCase();
+    var cat = fCat.value, pri = fPri.value, rev = document.getElementById('f-review').value;
+    filtered = D.tickets.filter(function (t) {
+      return (!cat || t.category === cat) && (!pri || t.priority === pri) &&
+             (!rev || (rev === 'yes') === t.needs_review) && (!q || t.text.toLowerCase().indexOf(q) !== -1);
+    });
+    shown = PAGE; render();
+  }
+
+  function render() {
+    var body = document.getElementById('rows'); body.textContent = '';
+    filtered.slice(0, shown).forEach(function (t) {
+      var tr = el('tr', 'row');
+      tr.appendChild(el('td', null, '#' + t.id));
+      tr.appendChild(el('td', null, t.category));
+      var pTd = el('td'); pTd.appendChild(el('span', 'badge ' + t.priority, t.priority)); tr.appendChild(pTd);
+      tr.appendChild(el('td', null, t.confidence.toFixed(2)));
+      var rTd = el('td');
+      rTd.appendChild(t.needs_review ? el('span', 'badge rev', 'Person') : el('span', null, 'Auto'));
+      tr.appendChild(rTd);
+      tr.appendChild(el('td', null, t.text.length > 150 ? t.text.slice(0, 150) + '…' : t.text));
+      var detail = el('tr', 'detail'); detail.style.display = 'none';
+      var dTd = el('td'); dTd.colSpan = 6;
+      dTd.appendChild(el('b', null, 'Full ticket')); dTd.appendChild(el('div', null, t.text));
+      dTd.appendChild(el('b', null, 'Why the AI chose this')); dTd.appendChild(el('div', null, t.reasoning));
+      dTd.appendChild(el('b', null, 'Suggested reply')); dTd.appendChild(el('div', null, t.reply));
+      if (t.review_reason) { dTd.appendChild(el('b', null, 'Why a person should look')); dTd.appendChild(el('div', null, t.review_reason)); }
+      detail.appendChild(dTd);
+      tr.addEventListener('click', function () { detail.style.display = detail.style.display === 'none' ? '' : 'none'; });
+      body.appendChild(tr); body.appendChild(detail);
+    });
+    document.getElementById('count').textContent = 'Showing ' + Math.min(shown, filtered.length) + ' of ' + filtered.length + ' matching tickets.';
+    document.getElementById('more').style.display = filtered.length > shown ? '' : 'none';
+  }
+
+  document.getElementById('more').addEventListener('click', function () { shown += PAGE; render(); });
+  ['q', 'f-category', 'f-priority', 'f-review'].forEach(function (id) {
+    document.getElementById(id).addEventListener(id === 'q' ? 'input' : 'change', applyFilters);
+  });
+  render();
+})();
+</script>
+</body>
+</html>
