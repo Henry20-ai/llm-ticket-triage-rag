@@ -33,6 +33,7 @@
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0; }
   .kpi .v { font-size: 28px; font-weight: 650; line-height: 1.15; }
   .kpi .l { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  #eval-table-card, #rules-card { grid-column: 1 / -1; }
   .chart-box { position: relative; height: 270px; }
   .note { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
   table { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -117,6 +118,7 @@
       <li><b>Pipeline:</b> ticket → Gemini embedding → pgvector search over 25 SOP documents → Gemini returns category, priority, confidence and a reply → review rule → Postgres.</li>
       <li><b>Review rule:</b> a ticket goes to a person if the predicted priority is High or Urgent, the category is Billing &amp; Payments, model confidence is low, or no SOP matches well.</li>
       <li><b>Evaluation:</b> accuracy is measured on tickets labelled by hand before any model output was seen. A fresh test set was kept apart from the tickets used to tune the prompt.</li>
+      <li><b>Review queue size:</b> every Billing &amp; Payments ticket is reviewed, even simple invoice requests, so about half of all tickets reach a person. A finer rule could shrink the queue but would need testing on fresh tickets.</li>
       <li><b>Limits:</b> small samples (wide confidence intervals), synthetic tickets, priority is subjective even between two humans, and the model is not reliable enough to run without review.</li>
     </ul>
   </section>
@@ -247,6 +249,8 @@
     scroll.appendChild(table); tableCard.appendChild(scroll);
     var ref = E.test || E.dev;
     var urgentText = 'Real Urgent tickets rated lower by the AI: ' + ref.urgent.rated_lower + ' of ' + ref.urgent.total + ' (' + setTitle[E.test ? 'test' : 'dev'].toLowerCase() + ').';
+    var live = ref.rules.filter(function (r) { return r.rule.indexOf('CURRENT RULE') === 0; })[0];
+    if (live) urgentText += ' With the review rule used in the pipeline (a person sees every High or Urgent prediction and every Billing ticket), ' + live.urgent_missed + ' of ' + live.urgent_total + ' Urgent tickets stayed unreviewed.';
     tableCard.appendChild(el('p', 'note', urgentText));
     tableCard.appendChild(el('p', 'note', 'The tuned prompt was checked on the development set; the fresh test set is the number to trust.'));
   } else {
